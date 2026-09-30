@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>LAST ROUND — Bar Roulette</title>
+<style>
+  :root {
+    --gold: #d4af37;
+    --gold-dim: rgba(212, 175, 55, 0.35);
+    --red: #ff2d55;
+    --panel: rgba(14, 10, 7, 0.78);
+    --panel-border: rgba(212, 175, 55, 0.22);
+    --text: #e8ddc8;
+    --text-dim: #9a8c72;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #060403; }
+  body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    color: var(--text);
+    -webkit-user-select: none; user-select: none;
+  }
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  canvas { outline: none; }
+
+  #ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  #ui > * { pointer-events: auto; }
+
+  .hidden { display: none !important; }
+  .screen {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, rgba(8,5,3,0.55), rgba(4,2,1,0.92));
+    transition: opacity 0.6s ease;
+  }
+
+  .big-title {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: clamp(44px, 8vw, 96px);
+    letter-spacing: 0.12em;
+    color: #f3e9d0;
+    text-shadow: 0 0 42px rgba(255, 45, 85, 0.55), 0 2px 0 #000;
+    font-weight: 700;
+  }
+  .subtitle {
+    margin-top: 4px; color: var(--text-dim); letter-spacing: 0.42em;
+    text-transform: uppercase; font-size: clamp(10px, 1.4vw, 14px);
+  }
+
+  .load-bar {
+    width: min(420px, 70vw); height: 3px; background: rgba(255,255,255,0.08);
+    margin-top: 38px; border-radius: 2px; overflow: hidden;
+  }
+  #loadFill { height: 100%; width: 0%; background: linear-gradient(90deg, #8a6a1e, var(--gold)); transition: width 0.25s ease; }
+  #loadStep { margin-top: 12px; color: var(--text-dim); font-size: 13px; letter-spacing: 0.14em; min-height: 18px; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 22px 28px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 22px 60px rgba(0,0,0,0.55);
+  }
+  .panel.small { padding: 10px 16px; font-size: 13px; }
+  .panel h1 { font-family: Georgia, serif; font-size: 26px; color: #f3e9d0; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .panel h2 { font-family: Georgia, serif; font-size: 20px; color: #f3e9d0; margin-bottom: 10px; }
+  .panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.18em; color: var(--gold); margin: 14px 0 8px; }
+
+  .btn {
+    pointer-events: auto; cursor: pointer;
+    background: rgba(212, 175, 55, 0.09);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 7px; padding: 11px 22px;
+    font-size: 14px; letter-spacing: 0.08em;
+    transition: all 0.18s ease;
+    font-family: inherit;
+  }
+  .btn:hover { background: rgba(212, 175, 55, 0.2); border-color: var(--gold); }
+  .btn.primary {
+    background: linear-gradient(180deg, rgba(212,175,55,0.28), rgba(212,175,55,0.14));
+    border-color: var(--gold); color: #f8eecd; font-weight: 600;
+  }
+  .btn.primary:hover { box-shadow: 0 0 24px rgba(212,175,55,0.35); }
+  .btn.danger { border-color: rgba(255,45,85,0.5); color: #ffb9c7; }
+  .btn.danger:hover { background: rgba(255,45,85,0.18); }
+  .btn.tiny { padding: 4px 10px; font-size: 12px; }
+  .btn:disabled { opacity: 0.35; cursor: default; }
+
+  input[type="text"], select {
+    background: rgba(0,0,0,0.45); color: var(--text);
+    border: 1px solid var(--panel-border); border-radius: 6px;
+    padding: 10px 14px; font-size: 15px; outline: none; font-family: inherit;
+  }
+  input[type="text"]:focus { border-color: var(--gold); }
+  input[type="range"] { accent-color: var(--gold); width: 150px; }
+
+  .row { display: flex; gap: 12px; align-items: center; }
+
+  /* ---- entry ---- */
+  #entryPanel { margin-top: 34px; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+  #entryPanel input { text-align: center; width: 240px; font-size: 17px; }
+  .quality-row { color: var(--text-dim); font-size: 13px; display: flex; gap: 8px; align-items: center; }
+
+  /* ---- lobby ---- */
+  #lobby { pointer-events: none; background: rgba(4,2,1,0.35); }
+  #lobby .panel { pointer-events: auto; width: min(560px, 92vw); max-height: 86vh; overflow-y: auto; }
+  #lobbyPlayers { list-style: none; margin: 14px 0; }
+  #lobbyPlayers li {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 12px; border-radius: 7px; margin-bottom: 4px;
+    background: rgba(255,255,255,0.03);
+  }
+  .dot { width: 12px; height: 12px; border-radius: 3px; flex: none; box-shadow: 0 0 8px currentColor; }
+  .p-name { flex: 1; font-size: 15px; }
+  .p-tag { font-size: 10px; letter-spacing: 0.14em; color: var(--text-dim); text-transform: uppercase; }
+  .p-ready { color: #6fdc8c; font-size: 12px; letter-spacing: 0.1em; }
+  .p-waiting { color: var(--text-dim); font-size: 12px; letter-spacing: 0.1em; }
+  .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 6px 0; font-size: 14px; }
+  .setting-row label { color: var(--text-dim); }
+  .setting-val { color: var(--gold); min-width: 40px; text-align: right; }
+
+  .hint { color: var(--text-dim); font-size: 12.5px; margin-top: 14px; line-height: 1.55; }
+  kbd {
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
+    border-bottom-width: 2px; border-radius: 4px; padding: 1px 7px;
+    font-family: inherit; font-size: 11.5px; color: #f0e6cf;
+  }
+
+  /* ---- HUD ---- */
+  #hud { position: absolute; inset: 0; pointer-events: none; }
+  #playersList { position: absolute; top: 18px; left: 18px; }
+  #playersList .pl-row { display: flex; align-items: center; gap: 9px; padding: 3px 0; }
+  #playersList .pl-row.dead { opacity: 0.38; text-decoration: line-through; }
+  #playersList .pl-row.turn .pl-name { color: var(--gold); }
+  #playersList .pl-row.me .pl-name::after { content: " (you)"; color: var(--text-dim); font-size: 11px; }
+  .pl-dot { width: 9px; height: 9px; border-radius: 2px; }
+
+  #turnBanner {
+    position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
+    text-align: center; pointer-events: none;
+  }
+  #turnText {
+    font-family: Georgia, serif; font-size: 21px; letter-spacing: 0.16em;
+    color: #f3e9d0; text-shadow: 0 2px 14px rgba(0,0,0,0.9);
+    text-transform: uppercase;
+  }
+  #turnText.you { color: var(--gold); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.55; } }
+  #turnTimerBar { width: 180px; height: 2px; margin: 8px auto 0; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+  #turnTimerFill { height: 100%; width: 100%; background: var(--gold); }
+
+  #prompt {
+    position: absolute; bottom: 12%; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px;
+    padding: 12px 22px; font-size: 14.5px; letter-spacing: 0.04em;
+    backdrop-filter: blur(8px); text-align: center; line-height: 1.7;
+    max-width: min(620px, 88vw);
+  }
+  #prompt .accent { color: var(--gold); }
+  #prompt .danger { color: #ff7d97; }
+
+  #spectatorBar {
+    position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .spec-label { color: #9fb2ff; letter-spacing: 0.22em; font-size: 11px; text-transform: uppercase; }
+  #specName { min-width: 110px; text-align: center; font-size: 14px; }
+
+  #netinfo {
+    position: absolute; top: 18px; right: 18px; text-align: right;
+    color: var(--text-dim); font-size: 11.5px; letter-spacing: 0.08em; line-height: 1.6;
+    pointer-events: none;
+  }
+  #netinfo .off { color: #ff7d97; }
+
+  #controlsHint {
+    position: absolute; bottom: 22px; left: 18px; color: var(--text-dim);
+    font-size: 12px; line-height: 1.8;
+  }
+
+  #crosshair {
+    position: absolute; top: 50%; left: 50%; width: 7px; height: 7px;
+    transform: translate(-50%, -50%); border: 1.5px solid rgba(243, 233, 208, 0.9);
+    border-radius: 50%; pointer-events: none;
+    box-shadow: 0 0 6px rgba(0,0,0,0.8);
+    transition: transform 0.12s ease, border-color 0.12s ease;
+  }
+  #crosshair.hot { transform: translate(-50%, -50%) scale(1.7); border-color: var(--red); }
+
+  #toasts {
+    position: absolute; bottom: 22%; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none;
+  }
+  .toast {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 7px;
+    padding: 9px 18px; font-size: 13.5px; letter-spacing: 0.05em;
+    animation: toastIn 0.3s ease, toastOut 0.5s ease 3.4s forwards;
+    backdrop-filter: blur(8px);
+  }
+  .toast.error { border-color: rgba(255,45,85,0.5); color: #ffb9c7; }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(12px); } }
+  @keyframes toastOut { to { opacity: 0; transform: translateY(-8px); } }
+
+  #settingsBtn { position: absolute; bottom: 18px; right: 18px; }
+  #settings .panel { width: min(460px, 92vw); }
+  #settings .setting-row { padding: 9px 0; }
+
+  #endscreen .panel { width: min(480px, 92vw); text-align: center; }
+  .crown { font-size: 44px; margin-bottom: 6px; }
+  #winnerName { font-size: 34px; }
+  #standings { margin: 18px 0; text-align: left; }
+  #standings .st-row { display: flex; gap: 10px; align-items: center; padding: 6px 4px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  #standings .st-pos { width: 26px; color: var(--text-dim); }
+  #standings .st-dead { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+
+  .fade-in { animation: fadeIn 0.7s ease; }
+  @keyframes fadeIn { from { opacity: 0; } }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.25); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="ui">
+  <!-- Loading / entry -->
+  <div id="loading" class="screen">
+    <div class="big-title">LAST ROUND</div>
+    <div class="subtitle">a cinematic game of chance</div>
+    <div class="load-bar"><div id="loadFill"></div></div>
+    <div id="loadStep">Warming up…</div>
+    <div id="entryPanel" class="hidden">
+      <input id="nameInput" type="text" maxlength="16" placeholder="Your name" autocomplete="off" spellcheck="false">
+      <div class="quality-row">
+        Graphics:
+        <select id="qualitySelect">
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high" selected>High</option>
+          <option value="ultra">Ultra</option>
+        </select>
+        <span id="qualityGuess"></span>
+      </div>
+      <button id="enterBtn" class="btn primary">ENTER THE BAR</button>
+      <div class="hint" style="text-align:center">
+        Headphones recommended · <span id="playerCountHint">connecting…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lobby -->
+  <div id="lobby" class="screen hidden">
+    <div class="panel fade-in">
+      <h1>The Lobby</h1>
+      <div id="lobbyStatus" class="hint" style="margin-top:0">Waiting for players…</div>
+      <ul id="lobbyPlayers"></ul>
+      <div class="row" style="justify-content:center; margin-top:16px">
+        <button id="readyBtn" class="btn">I'M READY</button>
+        <button id="startBtn" class="btn primary hidden">START MATCH</button>
+      </div>
+      <div id="hostSettings" class="hidden">
+        <h3>Match settings — host only</h3>
+        <div class="setting-row">
+          <label>Live chambers</label>
+          <div class="row"><input type="range" id="setLive" min="1" max="3" step="1" value="1"><span class="setting-val" id="setLiveVal">1</span></div>
+        </div>
+        <div class="setting-row">
+          <label>Cylinder size</label>
+          <div class="row"><input type="range" id="setChambers" min="4" max="8" step="1" value="6"><span class="setting-val" id="setChambersVal">6</span></div>
+        </div>
+        <div class="setting-row">
+          <label>Turn order</label>
+          <select id="setTurnOrder"><option value="seat">Around the table</option><option value="random">Random</option></select>
+        </div>
+        <div class="setting-row">
+          <label>After an empty self-shot</label>
+          <select id="setEmptySelf"><option value="next">Pass the gun</option><option value="extra">Shoot again</option></select>
+        </div>
+        <div class="setting-row">
+          <label>Turn timer</label>
+          <div class="row"><input type="range" id="setTimer" min="15" max="120" step="5" value="45"><span class="setting-val" id="setTimerVal">45s</span></div>
+        </div>
+      </div>
+      <div class="hint">
+        Walk around with <kbd>W A S D</kbd>, look with the mouse, <kbd>Shift</kbd> to run.<br>
+        The host starts the match once everyone is ready.<br>
+        On your turn: <b>click a player to shoot them</b> or press <kbd>F</kbd> to shoot yourself.
+      </div>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="playersList" class="panel small"></div>
+    <div id="turnBanner" class="hidden">
+      <div id="turnText"></div>
+      <div id="turnTimerBar"><div id="turnTimerFill"></div></div>
+    </div>
+    <div id="prompt" class="hidden"></div>
+    <div id="spectatorBar" class="panel small hidden">
+      <span class="spec-label">Spectator</span>
+      <button id="specPrev" class="btn tiny">◀</button>
+      <span id="specName">—</span>
+      <button id="specNext" class="btn tiny">▶</button>
+      <button id="specFree" class="btn tiny">Free cam · V</button>
+    </div>
+    <div id="netinfo"></div>
+    <div id="controlsHint" class="panel small hidden">
+      <kbd>W A S D</kbd> move &nbsp; <kbd>Shift</kbd> run &nbsp; <kbd>Esc</kbd> free the mouse
+    </div>
+    <div id="crosshair" class="hidden"></div>
+  </div>
+
+  <!-- End screen -->
+  <div id="endscreen" class="screen hidden">
+    <div class="panel fade-in">
+      <div class="crown">🏆</div>
+      <h1 id="winnerName">—</h1>
+      <div id="standings"></div>
+      <button id="backToLobbyBtn" class="btn primary hidden">BACK TO LOBBY</button>
+      <div class="hint" id="endHint" style="text-align:center"></div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div id="settings" class="screen hidden">
+    <div class="panel">
+      <h2>Settings</h2>
+      <div class="setting-row">
+        <label>Graphics quality</label>
+        <select id="gfxQuality">
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="ultra">Ultra</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>Auto quality (drops if FPS is low)</label>
+        <input type="checkbox" id="gfxAuto" checked>
+      </div>
+      <div class="setting-row">
+        <label>Master volume</label>
+        <input type="range" id="volMaster" min="0" max="100" value="80">
+      </div>
+      <div class="setting-row">
+        <label>Music volume</label>
+        <input type="range" id="volMusic" min="0" max="100" value="50">
+      </div>
+      <div class="setting-row">
+        <label>Mouse sensitivity</label>
+        <input type="range" id="sens" min="20" max="200" value="100">
+      </div>
+      <div class="row" style="justify-content:flex-end; margin-top:14px">
+        <button id="closeSettings" class="btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <button id="settingsBtn" class="btn tiny hidden">⚙ Settings</button>
+  <div id="toasts"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

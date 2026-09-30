@@ -23,12 +23,21 @@ a dramatic reload.
 
 ## Quick start
 
+**Easiest (no install, no build):** the repo ships prebuilt, self-contained
+files — the server bundles all of its dependencies, so plain Node.js is enough:
+
+```bash
+node server/dist/server.js
+```
+
+**Full workflow** (use this if you changed any code in `client/src` or `server/src`):
+
 ```bash
 npm install
 npm start
 ```
 
-`npm start` builds the client + server and starts listening. The port is read from
+`npm start` rebuilds the client + server and starts listening. The port is read from
 **`port.txt`** in the project root (default `3000` if missing). The console prints
 every LAN address the server is reachable on, e.g.:
 

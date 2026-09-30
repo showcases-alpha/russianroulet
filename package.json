@@ -7,7 +7,7 @@
   "scripts": {
     "build": "npm run build:client && npm run build:server",
     "build:client": "node scripts/build-client.mjs",
-    "build:server": "esbuild server/src/server.ts --bundle --platform=node --outfile=server/dist/server.js --format=esm --external:ws --external:express",
+    "build:server": "esbuild server/src/server.ts --bundle --platform=node --outfile=server/dist/server.js --format=esm --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "dev:client": "node scripts/build-client.mjs --dev",
     "dev": "npm run dev:client && npm run build:server && node server/dist/server.js",
     "start": "npm run build && node server/dist/server.js",
