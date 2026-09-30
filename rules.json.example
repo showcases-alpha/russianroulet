@@ -1,0 +1,21 @@
+{
+  "_comment": "Copy this file to rules.json to override the server's default game rules. Delete rules.json to return to defaults. All fields are optional.",
+  "chamberCount": 6,
+  "liveCount": 1,
+  "reloadOnLive": true,
+  "reloadWhenExhausted": true,
+  "turnOrder": "seat",
+  "emptySelfShot": "next",
+  "emptyTargetShot": "next",
+  "turnTimeoutSec": 45,
+  "timeoutAction": "shoot_self",
+  "minPlayers": 2,
+  "maxPlayers": 8,
+  "tickRate": 20,
+
+  "preShotMs": 2800,
+  "emptyOutcomeMs": 3400,
+  "liveOutcomeMs": 7200,
+  "reloadMs": 9200,
+  "cleanupDelayMs": 9000
+}
