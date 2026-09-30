@@ -137,6 +137,8 @@ export class ParticleSystem {
     this.sparks = new ParticleLayer(Math.floor(600 * density), makeRadialGlow(64, 0.1), true);
     this.smoke = new ParticleLayer(Math.floor(260 * density), makeSmokePuff(128, 5), false);
     this.group.add(this.sparks.points, this.smoke.points);
+    // particles animate via buffer attributes — transforms are static
+    this.group.traverse((o) => { o.matrixAutoUpdate = false; o.updateMatrix(); });
   }
 
   /** Muzzle smoke: slow billowing drift forward of the muzzle. */

@@ -54,7 +54,20 @@ export class BarEnvironment {
     this.buildLights();
     if (this.quality.volumetrics) this.buildVolumetrics();
     this.buildDust();
+    this.freezeMatrices(this.group);
     report('Last call', 1);
+  }
+
+  /**
+   * The bar is static — stop three.js from recomputing ~200 local matrices
+   * every frame. (Dust animates via vertex attributes, not transforms, so it
+   * is unaffected.) Pure CPU win, zero visual change.
+   */
+  private freezeMatrices(root: THREE.Object3D): void {
+    root.traverse((o) => {
+      o.matrixAutoUpdate = false;
+      o.updateMatrix();
+    });
   }
 
   /* ------------------------------------------------ floor */
@@ -347,6 +360,7 @@ export class BarEnvironment {
       // player stands just behind their chair
       seats.push({ pos: new THREE.Vector3(x * 1.18, 0, z * 1.18), yaw });
     }
+    this.freezeMatrices(this.chairs);
     return seats;
   }
 

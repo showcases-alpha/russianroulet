@@ -46,8 +46,10 @@ Local:      http://localhost:3000
 Network:    http://192.168.1.50:3000
 ```
 
-Friends on the same network open `http://YOUR_SERVER_IP:3000` in Chrome, Edge or
-Firefox, type a name, press **ENTER THE BAR** — and they're in the bar with you.
+Friends open `http://YOUR_SERVER_IP:3000` in Chrome, Edge or Firefox, type a
+name — and then rooms take over (see below): **create a room**, give everyone
+the **4-letter code**, and they join your private lobby. Any number of rooms
+can run side by side on one server.
 
 ### Playing over a LAN
 
@@ -65,6 +67,18 @@ as an environment override.
 
 ---
 
+## Rooms
+
+The server hosts any number of isolated rooms — each with its own lobby,
+match, revolver and rules.
+
+- **Create Room** on the entry screen → you get a 4-letter code (e.g. `7HKC`),
+  shown at the top of the lobby with a **COPY** button.
+- Friends enter the code on their entry screen and hit **JOIN ROOM**.
+- Joining without a code puts you in the public room (`PUB`).
+- Bad codes are rejected cleanly; empty rooms close automatically after 5 min.
+- Disconnects/reconnects route back to *your* room automatically.
+
 ## How to play
 
 | Input | Action |
@@ -78,7 +92,7 @@ as an environment override.
 | `V` | Spectator: toggle free camera (`W A S D`, `Space`/`Ctrl` up/down) |
 | `Esc` | Release the mouse pointer |
 
-**Loop:** join → lobby (walk around while you wait) → everyone readies → host starts
+**Loop:** create/join a room → lobby (walk around while you wait) → everyone readies → host starts
 → players take turns firing at themselves or others → empty chambers *click* and
 pass the gun → a live round eliminates its target with the full cinematic → after a
 live round the revolver is reloaded on camera → last player standing wins → the
@@ -158,7 +172,7 @@ turn_action (aim begins)  →  [dramatic pause]  →  shot_result (LIVE/EMPTY)
 │       ├── audio/            Procedural WebAudio engine (all sounds synthesized)
 │       └── environment/      The bar (counter, bottles, booths, pool table, lights…)
 ├── server/src/
-│   ├── game/                 GameManager, RevolverState, TurnManager
+│   ├── game/                 GameManager, RoomManager, RevolverState, TurnManager
 │   ├── players/              Player records, reconnection grace
 │   ├── networking (in server.ts) HTTP + WebSocket glue
 │   └── config.ts             port.txt + rules.json loading
@@ -233,6 +247,22 @@ node -e "const z=require('zlib'),f=require('fs');f.writeFileSync('/tmp/a.tar',
 mkdir -p /tmp/al2023 && tar -xf /tmp/a.tar -C /tmp/al2023
 LD_LIBRARY_PATH=/tmp/al2023/lib PUPPETEER_EXECUTABLE_PATH=/tmp/chromium node test/browser-smoke.mjs
 ```
+
+## Performance notes
+
+The client is tuned to avoid the classic web-game stutters without cutting
+visual quality:
+
+- zero per-frame allocations in the hot paths (character posing, cinematics,
+  camera) — no garbage-collector hitches
+- body-part lookups are O(1) map hits instead of scene traversals
+- the static bar (≈200 objects) never recomputes transforms
+- DOM prompts only update when their content actually changes
+- positional-audio listener updates don't schedule audio-thread events
+- frustum culling + instancing (bottles, glasses, chips, balls) are on by default
+
+If it still runs slow on your machine, the ⚙ Settings panel scales everything
+(Low → Ultra) and the FPS watchdog steps quality down automatically.
 
 ## Troubleshooting
 

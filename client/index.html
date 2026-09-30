@@ -105,6 +105,26 @@
   #entryPanel input { text-align: center; width: 240px; font-size: 17px; }
   .quality-row { color: var(--text-dim); font-size: 13px; display: flex; gap: 8px; align-items: center; }
 
+  /* ---- entry room controls ---- */
+  #entryPanel .join-row { gap: 8px; }
+  #entryPanel .join-row input {
+    width: 110px; text-align: center; text-transform: uppercase;
+    letter-spacing: 0.3em; font-size: 17px; font-weight: 700;
+  }
+
+  /* ---- lobby room code ---- */
+  #roomCodeRow {
+    display: flex; align-items: center; gap: 14px; justify-content: center;
+    padding: 10px 14px; margin-bottom: 14px;
+    background: rgba(212,175,55,0.07); border: 1px dashed rgba(212,175,55,0.4);
+    border-radius: 8px;
+  }
+  .room-label { font-size: 10.5px; letter-spacing: 0.28em; color: var(--text-dim); }
+  #roomCode {
+    font-family: Georgia, serif; font-size: 30px; font-weight: 700;
+    letter-spacing: 0.32em; color: #f3e9d0; text-shadow: 0 0 18px rgba(212,175,55,0.4);
+  }
+
   /* ---- lobby ---- */
   #lobby { pointer-events: none; background: rgba(4,2,1,0.35); }
   #lobby .panel { pointer-events: auto; width: min(560px, 92vw); max-height: 86vh; overflow-y: auto; }
@@ -248,8 +268,13 @@
         </select>
         <span id="qualityGuess"></span>
       </div>
-      <button id="enterBtn" class="btn primary">ENTER THE BAR</button>
+      <button id="createRoomBtn" class="btn primary">CREATE ROOM</button>
+      <div class="row join-row">
+        <input id="codeInput" type="text" maxlength="4" placeholder="CODE" autocapitalize="characters" autocomplete="off" spellcheck="false">
+        <button id="joinRoomBtn" class="btn">JOIN ROOM</button>
+      </div>
       <div class="hint" style="text-align:center">
+        Create a room and give your friends the 4-letter code.<br>
         Headphones recommended · <span id="playerCountHint">connecting…</span>
       </div>
     </div>
@@ -258,6 +283,11 @@
   <!-- Lobby -->
   <div id="lobby" class="screen hidden">
     <div class="panel fade-in">
+      <div id="roomCodeRow" class="hidden">
+        <span class="room-label">ROOM CODE</span>
+        <span id="roomCode">----</span>
+        <button id="copyCodeBtn" class="btn tiny">COPY</button>
+      </div>
       <h1>The Lobby</h1>
       <div id="lobbyStatus" class="hint" style="margin-top:0">Waiting for players…</div>
       <ul id="lobbyPlayers"></ul>

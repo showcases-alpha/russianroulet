@@ -1,12 +1,15 @@
 /**
  * character.ts — deliberately simple, blocky humanoid (per the reference art):
- * cuboid head with dot eyes, rectangular torso, straight rectangular
- * upper/lower arms, rectangular legs, block feet. Clearly separated parts so
- * the ragdoll system can take over each section. PBR-lit, shadow receiving,
- * per-player jacket colors + simple cosmetic variations.
+ * a cuboid head, rectangular torso, straight rectangular arms, rectangular
+ * legs and block feet — with no facial features and no cosmetics. Clearly
+ * separated parts so the ragdoll system can take over each section.
+ * PBR-lit, shadow receiving, per-player jacket colors + name tags.
+ *
+ * Perf notes: part meshes are cached in a Map (no scene traversals at
+ * runtime) and the per-frame update path performs no allocations.
  */
 import * as THREE from 'three';
-import { makeNameTag, mulberry32 } from '../game/textures.js';
+import { makeNameTag } from '../game/textures.js';
 import { clamp, dampAngle, lerp } from '../game/mathUtils.js';
 
 export const JACKET_COLORS = [
@@ -15,18 +18,11 @@ export const JACKET_COLORS = [
 ];
 export const PANTS_COLORS = [0x23252e, 0x2e2620, 0x1f2a30, 0x30222b, 0x26302a];
 export const SKIN_TONES = [0xe8b88f, 0xc98d63, 0x9c6a44, 0x70482c, 0xf0cfa8, 0x5a3620];
-export const HAT_TYPES = ['none', 'cap', 'beanie', 'fedora'] as const;
-export type HatType = typeof HAT_TYPES[number];
-
-export interface CharacterPart {
-  mesh: THREE.Mesh;
-  /** local offset of the part's center relative to its pivot (for ragdoll spawn) */
-  name: string;
-}
 
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion();
+const _q2 = new THREE.Quaternion();
 const DOWN = new THREE.Vector3(0, -1, 0);
 
 export class Character {
@@ -52,13 +48,14 @@ export class Character {
   private lookAt: THREE.Vector3 | null = null;
   private headYaw = 0;
   private headPitch = 0;
-  private parts: THREE.Mesh[] = [];
+  /** name → mesh cache: ragdoll + cinematic lookups are O(1), no traversals */
+  private parts = new Map<string, THREE.Mesh>();
   private materials: THREE.MeshStandardMaterial[] = [];
 
   readonly playerId: string;
   readonly displayName: string;
 
-  constructor(playerId: string, name: string, colorIndex: number, hat: HatType) {
+  constructor(playerId: string, name: string, colorIndex: number) {
     this.playerId = playerId;
     this.displayName = name;
 
@@ -69,15 +66,13 @@ export class Character {
     const pantsMat = new THREE.MeshStandardMaterial({ color: PANTS_COLORS[colorIndex % PANTS_COLORS.length], roughness: 0.9 });
     const skinMat = new THREE.MeshStandardMaterial({ color: SKIN_TONES[colorIndex % SKIN_TONES.length], roughness: 0.6 });
     const shoeMat = new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.45, metalness: 0.1 });
-    const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xbfd4ff, emissiveIntensity: 0.55, roughness: 0.3 });
-    const pupilMat = new THREE.MeshStandardMaterial({ color: 0x101014, roughness: 0.3 });
-    this.materials.push(jacketMat, pantsMat, skinMat, shoeMat, eyeMat, pupilMat);
+    this.materials.push(jacketMat, pantsMat, skinMat, shoeMat);
 
     const box = (w: number, h: number, d: number, mat: THREE.Material, name: string) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       m.castShadow = true; m.receiveShadow = true;
       m.name = name;
-      this.parts.push(m);
+      this.parts.set(name, m);
       return m;
     };
 
@@ -90,50 +85,12 @@ export class Character {
     belt.position.y = -0.36;
     this.torso.add(belt);
 
-    /* ----- head ----- */
+    /* ----- head (plain cuboid — no face) ----- */
     this.headPivot.position.y = 1.70;
     this.group.add(this.headPivot);
     this.head = box(0.48, 0.46, 0.48, skinMat, 'head');
     this.head.position.y = 0.25;
     this.headPivot.add(this.head);
-    // simple dot eyes
-    for (const sx of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.09, 0.02), eyeMat);
-      eye.position.set(sx * 0.11, 0.30, 0.245);
-      this.head.add(eye);
-      const pupil = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.045, 0.012), pupilMat);
-      pupil.position.set(sx * 0.11, 0.295, 0.258);
-      this.head.add(pupil);
-      // eyebrow
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.022, 0.02), pupilMat);
-      brow.position.set(sx * 0.11, 0.365, 0.245);
-      this.head.add(brow);
-    }
-    // simple mouth
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.026, 0.02), pupilMat);
-    mouth.position.set(0, 0.13, 0.245);
-    this.head.add(mouth);
-
-    // hat cosmetics
-    if (hat === 'cap') {
-      const cap = box(0.5, 0.1, 0.5, jacketMat, 'hat');
-      cap.position.y = 0.5;
-      this.head.add(cap);
-      const brim = box(0.48, 0.03, 0.2, jacketMat, 'hatBrim');
-      brim.position.set(0, 0.46, 0.32);
-      this.head.add(brim);
-    } else if (hat === 'beanie') {
-      const beanie = box(0.5, 0.16, 0.5, pantsMat, 'hat');
-      beanie.position.y = 0.51;
-      this.head.add(beanie);
-    } else if (hat === 'fedora') {
-      const crown = box(0.36, 0.22, 0.36, shoeMat, 'hat');
-      crown.position.y = 0.56;
-      this.head.add(crown);
-      const brim = box(0.6, 0.035, 0.6, shoeMat, 'hatBrim');
-      brim.position.y = 0.46;
-      this.head.add(brim);
-    }
 
     /* ----- arms ----- */
     const mkArm = (side: -1 | 1, pivot: THREE.Group, elbow: THREE.Group) => {
@@ -150,7 +107,7 @@ export class Character {
       const hand = box(0.15, 0.14, 0.15, skinMat, `hand${side < 0 ? 'L' : 'R'}`);
       hand.position.y = -0.36;
       elbow.add(hand);
-      // hand attach point for the revolver (world-space marker used by game)
+      // hand attach point for the revolver
       const grip = new THREE.Object3D();
       grip.name = 'grip';
       grip.position.set(0, -0.42, 0.02);
@@ -191,7 +148,7 @@ export class Character {
   }
 
   getGripAnchor(side: 'R' | 'L' = 'R'): THREE.Object3D {
-    return (side === 'R' ? this.elbowRPivot : this.elbowLPivot).getObjectByName('grip')!;
+    return (side === 'R' ? this.elbowRPivot : this.elbowLPivot).children.find((c) => c.name === 'grip')!;
   }
 
   setAimTarget(target: THREE.Vector3 | null): void {
@@ -207,19 +164,18 @@ export class Character {
     this.headPitch = intensity;
   }
 
-  /** World-space positions of the main ragdoll-able parts. */
-  getPartWorld(name: string): THREE.Vector3 {
-    const part = this.findPart(name);
-    return part ? part.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3();
+  /** World-space position of a body part (reuses `out` — no allocation). */
+  getPartWorld(name: string, out = new THREE.Vector3()): THREE.Vector3 {
+    const part = this.parts.get(name);
+    if (!part) return out.set(0, 0, 0);
+    return part.getWorldPosition(out);
   }
 
   findPart(name: string): THREE.Mesh | null {
-    let found: THREE.Mesh | null = null;
-    this.group.traverse((o) => { if ((o as THREE.Mesh).isMesh && o.name === name) found = o as THREE.Mesh; });
-    return found;
+    return this.parts.get(name) ?? null;
   }
 
-  allParts(): THREE.Mesh[] { return this.parts; }
+  allParts(): THREE.Mesh[] { return [...this.parts.values()]; }
 
   update(dt: number, speed: number): void {
     this.walkPhase += dt * clamp(speed, 0, 6) * 3.1;
@@ -279,9 +235,10 @@ export class Character {
     const dir = _v2.copy(target).sub(_v1).normalize();
     // quaternion that rotates the hanging arm (local -Y) to point at the target
     _q1.setFromUnitVectors(DOWN, dir);
-    const parentWorldQ = pivot.parent!.getWorldQuaternion(new THREE.Quaternion());
-    const local = _q1.clone().premultiply(parentWorldQ.invert());
-    pivot.quaternion.slerp(local, weight);
+    pivot.parent!.getWorldQuaternion(_q2);
+    // local rotation = inverse(parent world) * desired world rotation
+    _q2.invert().multiply(_q1);
+    pivot.quaternion.slerp(_q2, weight);
     // slight bend relaxation for the support arm
     elbow.rotation.x = lerp(elbow.rotation.x, primary ? -0.12 : -0.45, weight * 0.5);
   }
@@ -297,10 +254,7 @@ export class Character {
 
   /** Release GPU resources (character must be out of the scene or inside a ragdoll). */
   dispose(): void {
-    this.group.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (mesh.isMesh) mesh.geometry?.dispose();
-    });
+    for (const m of this.parts.values()) m.geometry?.dispose();
     for (const m of this.materials) m.dispose();
     (this.nameTag.material as THREE.SpriteMaterial).map?.dispose();
     (this.nameTag.material as THREE.SpriteMaterial).dispose();

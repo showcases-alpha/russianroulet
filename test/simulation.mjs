@@ -21,9 +21,10 @@ class TestClient {
     this.msgs = [];
     this.handlers = [];
     this.id = null;
+    this.roomCode = null;
     this.alive = new Map();
   }
-  async connect() {
+  async connect(opts) {
     this.ws = new WebSocket(URL);
     await new Promise((res, rej) => { this.ws.on('open', res); this.ws.on('error', rej); });
     this.ws.on('message', (raw) => {
@@ -32,9 +33,10 @@ class TestClient {
       this.alive.set(msg.type, (this.alive.get(msg.type) || 0) + 1);
       for (const h of this.handlers) h(msg);
     });
-    this.send({ type: 'hello', name: this.name });
+    this.send({ type: 'hello', name: this.name, ...(opts ?? {}) });
     const welcome = await this.waitFor('welcome');
     this.id = welcome.playerId;
+    this.roomCode = welcome.roomCode;
   }
   send(obj) { this.ws.send(JSON.stringify(obj)); }
   waitFor(type, timeout = 15000) {
@@ -65,11 +67,16 @@ async function runMatch(rulesOverride = {}) {
 
   const clients = [];
   try {
-    for (const name of ['Alice', 'Bob', 'Carol']) {
+    // host creates a room, the others join with its code
+    const host = new TestClient('Alice');
+    await host.connect({ create: true });
+    clients.push(host);
+    for (const name of ['Bob', 'Carol']) {
       const c = new TestClient(name);
-      await c.connect();
+      await c.connect({ room: host.roomCode });
       clients.push(c);
     }
+    check(clients.every((c) => c.roomCode === host.roomCode), 'all clients in the same room');
     await sleep(300);
     check(clients[0].msgs.some((m) => m.type === 'lobby_state' && m.players.length === 3), 'three players in lobby');
 
@@ -159,9 +166,63 @@ async function runMatch(rulesOverride = {}) {
   }
 }
 
+async function roomTests() {
+  console.log('\n━━━ Room system tests ━━━');
+  const server = spawn('node', ['server/dist/server.js'], {
+    env: { ...process.env, PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  server.stdout.on('data', () => {});
+  server.stderr.on('data', (d) => process.stderr.write('  [srv!] ' + d));
+  await sleep(1200);
+  const clients = [];
+  try {
+    const a1 = new TestClient('Ann');
+    await a1.connect({ create: true });
+    clients.push(a1);
+    const b1 = new TestClient('Bela');
+    await b1.connect({ create: true });
+    clients.push(b1);
+    check(a1.roomCode !== b1.roomCode, `two rooms get different codes (${a1.roomCode} / ${b1.roomCode})`);
+
+    const a2 = new TestClient('Ari');
+    await a2.connect({ room: a1.roomCode });
+    clients.push(a2);
+    await sleep(400);
+    const lobbyA = a1.msgs.filter((m) => m.type === 'lobby_state').pop();
+    check(lobbyA.players.length === 2, 'room A sees only its own 2 players');
+    const lobbyB = b1.msgs.filter((m) => m.type === 'lobby_state').pop();
+    check(lobbyB.players.length === 1, 'room B is isolated (1 player)');
+
+    // invalid code → clean rejection + close
+    const bad = new TestClient('Nope');
+    await bad.connect({ room: 'ZZZZ' }).catch(() => null);
+    const err = bad.msgs.find((m) => m.type === 'error' && m.code === 'room_not_found');
+    check(!!err, 'invalid room code rejected with room_not_found');
+
+    // room A runs its own match; room B is untouched
+    for (const c of [a1, a2]) c.send({ type: 'set_ready', ready: true });
+    await sleep(200);
+    a1.send({ type: 'start_game' });
+    await a1.waitFor('game_start', 5000);
+    check(true, 'room A started its own match');
+    check(b1.msgs.filter((m) => m.type === 'game_start').length === 0, 'room B unaffected by room A match');
+
+    // codeless join → public room
+    const d = new TestClient('Solo');
+    await d.connect();
+    clients.push(d);
+    check(d.roomCode === 'PUB', `codeless join lands in the public room (${d.roomCode})`);
+  } finally {
+    for (const c of clients) c.close();
+    server.kill();
+    await sleep(300);
+  }
+}
+
 console.log('══════════ LAST ROUND server simulation ══════════');
 await runMatch({});
 await runMatch({ liveCount: 2, chamberCount: 6, emptySelfShot: 'extra' });
+await roomTests();
 
 if (failures) { console.log(`\n${failures} FAILURES`); process.exit(1); }
 console.log('\nAll simulation checks passed ✔');

@@ -1,7 +1,8 @@
 /**
  * server.ts — HTTP + WebSocket entry point.
- * Serves the built client from client/public and hosts the authoritative game.
- * Port comes from port.txt (fallback 3000).
+ * Serves the built client from client/public and hosts any number of game
+ * rooms. Port comes from port.txt (fallback 3000). The bundle is
+ * self-contained (ws + express are bundled in), so it runs with plain node.
  */
 import http from 'node:http';
 import os from 'node:os';
@@ -10,18 +11,20 @@ import fs from 'node:fs';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { GameManager } from './game/gameManager.js';
+import { RoomManager } from './game/roomManager.js';
 import { readPort, ROOT_DIR } from './config.js';
 import type { ClientMessage } from '../../shared/protocol.js';
+import type { Player } from './players/player.js';
 
 const PORT = readPort();
-const game = new GameManager();
+const rooms = new RoomManager();
 
 /* ---------------- HTTP: static client ---------------- */
 
 const app = express();
 const publicDir = path.join(ROOT_DIR, 'client', 'public');
 app.use(express.static(publicDir, { index: 'index.html' }));
-app.get('/healthz', (_req, res) => res.json({ ok: true, phase: game.phase }));
+app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.list() }));
 app.use((_req, res) => {
   // SPA fallback
   res.sendFile(path.join(publicDir, 'index.html'));
@@ -32,13 +35,11 @@ const server = http.createServer(app);
 /* ---------------- WebSocket: game transport ---------------- */
 
 const wss = new WebSocketServer({ server, path: '/ws' });
-const sockets = new WeakMap<WebSocket, { playerId: string | null }>();
-
 const HELLO_TIMEOUT = 8000;
 
 wss.on('connection', (socket) => {
-  sockets.set(socket, { playerId: null });
-  let player: import('./players/player.js').Player | null = null;
+  let player: Player | null = null;
+  let game: GameManager | null = null;
 
   const helloTimer = setTimeout(() => {
     if (!player) socket.close(4000, 'no hello');
@@ -51,12 +52,42 @@ wss.on('connection', (socket) => {
 
     if (msg.type === 'hello') {
       if (player) return;
-      const { player: p } = game.join(msg.name || 'Stranger', socket, msg.token);
-      player = p;
-      sockets.set(socket, { playerId: p.id });
+
+      // 1) reconnecting player? route them back to their own room
+      if (msg.token) {
+        const room = rooms.findByToken(msg.token);
+        if (room) {
+          game = room;
+          const joined = game.join(msg.name || 'Stranger', socket, msg.token);
+          player = joined.player;
+          return;
+        }
+      }
+
+      // 2) explicit room creation / join
+      if (msg.create) {
+        const made = rooms.create();
+        console.log(`[rooms] created room ${made.code}`);
+        game = made.game;
+      } else if (msg.room) {
+        const found = rooms.get(msg.room);
+        if (!found) {
+          socket.send(JSON.stringify({ type: 'error', code: 'room_not_found', message: `No room with code "${String(msg.room).toUpperCase()}".` }));
+          socket.close(4001, 'room_not_found');
+          return;
+        }
+        game = found;
+      } else {
+        // 3) no code → the default public room
+        game = rooms.defaultRoom();
+      }
+
+      const joined = game.join(msg.name || 'Stranger', socket, msg.token);
+      player = joined.player;
       return;
     }
-    if (!player) return; // must hello first
+
+    if (!player || !game) return; // must hello first
 
     switch (msg.type) {
       case 'set_ready': game.setReady(player, msg.ready); break;
@@ -71,7 +102,7 @@ wss.on('connection', (socket) => {
 
   socket.on('close', () => {
     clearTimeout(helloTimer);
-    if (player) game.handleDisconnect(player);
+    if (player && game) game.handleDisconnect(player);
   });
 
   socket.on('error', () => { /* handled by close */ });
@@ -96,7 +127,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('──────────────────────────────────────────────────────');
   console.log(`  Local:      http://localhost:${PORT}`);
   for (const ip of lanAddresses()) console.log(`  Network:    http://${ip}:${PORT}`);
-  console.log('  Players on the same network join with that address.');
+  console.log('  Create a room in-game and share its 4-letter code.');
   console.log(`  Port configured via port.txt (currently ${PORT}).`);
   console.log('──────────────────────────────────────────────────────');
 });

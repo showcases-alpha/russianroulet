@@ -39,6 +39,7 @@ export interface ShotResultInfo {
 
 export interface CineContext {
   rules: GameRules;
+  getScene(): THREE.Scene;
   getCharacter(id: string): Character | null;
   getRevolver(): Revolver;
   getParticles(): ParticleSystem;
@@ -58,6 +59,13 @@ export interface CineContext {
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
+// scratch objects — the cinematic update path must not allocate (GC = stutter)
+const T1 = new THREE.Vector3();
+const T2 = new THREE.Vector3();
+const T3 = new THREE.Vector3();
+const T4 = new THREE.Vector3();
+const T5 = new THREE.Vector3();
+const TQ = new THREE.Quaternion();
 
 export class CinematicSystem {
   phase: CinePhase = 'idle';
@@ -87,6 +95,10 @@ export class CinematicSystem {
 
   private bullet: Bullet | null = null;
   private bulletPath = { from: new THREE.Vector3(), to: new THREE.Vector3() };
+  private bulletAim = new THREE.Vector3();
+  private bulletSide = new THREE.Vector3();
+  private tmpHeadY = new THREE.Vector3();
+  private tmpHeadY2 = new THREE.Vector3();
   private heartbeatAccum = 0;
   private spectatorDone = false;
 
@@ -210,21 +222,23 @@ export class CinematicSystem {
     const t = this.phaseTime;
 
     // aim pose
-    const targetHead = target ? target.getPartWorld('head') : shooter.getPartWorld('head');
-    const headY = new THREE.Vector3(targetHead.x, targetHead.y + 0.12, targetHead.z);
+    const headY = this.tmpHeadY;
+    if (target) target.getPartWorld('head', headY);
+    else shooter.getPartWorld('head', headY);
+    headY.y += 0.12;
     shooter.setAimTarget(headY);
     shooter.setLookAt(headY);
-    if (target && !shot.self) target.setLookAt(gun.getMuzzleWorld(new THREE.Vector3()));
+    if (target && !shot.self) target.setLookAt(gun.getMuzzleWorld(T4));
 
     // camera pose
-    const muzzle = gun.getMuzzleWorld(new THREE.Vector3());
-    const aim = new THREE.Vector3();
+    const muzzle = gun.getMuzzleWorld(T1);
+    const aim = T2;
     if (shot.self) {
-      aim.copy(shooter.getPartWorld('head')).sub(muzzle).normalize();
+      aim.copy(shooter.getPartWorld('head', T5)).sub(muzzle).normalize();
     } else {
       aim.copy(headY).sub(muzzle).normalize();
     }
-    const side = new THREE.Vector3().crossVectors(aim, UP).normalize();
+    const side = T3.crossVectors(aim, UP).normalize();
 
     if (!this.camInitialized) {
       this.camPos.copy(camera.position);
@@ -233,11 +247,11 @@ export class CinematicSystem {
       this.fovTarget = shot.self ? 44 : 38;
     }
 
-    const desired = new THREE.Vector3();
+    const desired = T4;
     if (shot.self) {
       // profile of the shooter: head + gun visible, dramatic side angle
-      const back = aim.clone().negate();
-      desired.copy(shooter.getPartWorld('head')).addScaledVector(side, 1.25).addScaledVector(back, 0.45).addScaledVector(UP, 0.12);
+      const back = T5.copy(aim).negate();
+      desired.copy(shooter.getPartWorld('head', this.tmpHeadY2)).addScaledVector(side, 1.25).addScaledVector(back, 0.45).addScaledVector(UP, 0.12);
     } else {
       // just off the muzzle, looking down the barrel toward the target
       desired.copy(muzzle).addScaledVector(aim, -0.52).addScaledVector(side, 0.36).addScaledVector(UP, 0.17);
@@ -247,9 +261,9 @@ export class CinematicSystem {
     desired.y += Math.sin(t * 0.53) * 0.012;
     dampV3(this.camPos, desired, 2.6, dt);
 
-    const lookDesired = shot.self
-      ? shooter.getPartWorld('head').lerp(muzzle, 0.35)
-      : muzzle.clone().addScaledVector(aim, 1.4).lerp(headY, 0.35);
+    const lookDesired = T5;
+    if (shot.self) lookDesired.copy(shooter.getPartWorld('head', this.tmpHeadY2)).lerp(muzzle, 0.35);
+    else lookDesired.copy(muzzle).addScaledVector(aim, 1.4).lerp(headY, 0.35);
     dampV3(this.camLook, lookDesired, 3, dt);
 
     // heartbeat tension
@@ -295,7 +309,7 @@ export class CinematicSystem {
       this.setBeat('fall');
       gun.hammerFall();
       if (!live) {
-        this.ctx.getAudio().play3D('click', gun.getFlashWorld(new THREE.Vector3()), { gain: 1.2, reverb: 0.5 });
+        this.ctx.getAudio().play3D('click', gun.getFlashWorld(T1), { gain: 1.2, reverb: 0.5 });
       }
     }
     if (live) {
@@ -363,10 +377,9 @@ export class CinematicSystem {
       this.bullet = new Bullet();
       this.bullet.group.position.copy(muzzle);
       this.bullet.setDirection(aim);
-      this.ctx.getPostFX; // noop
-      const scene = camera.parent ?? (gun.group as unknown as { parent: THREE.Object3D }).parent;
-      (gun.group.parent ?? scene).add(this.bullet.group);
-      void scene;
+      this.ctx.getScene().add(this.bullet.group);
+      this.bulletAim.copy(aim);
+      this.bulletSide.crossVectors(aim, UP).normalize();
       this.bulletPath.from.copy(muzzle);
       const targetChar = this.ctx.getCharacter(shot.targetId);
       this.bulletPath.to.copy(targetChar ? targetChar.getPartWorld('torso') : muzzle.clone().addScaledVector(aim, 3));
@@ -389,7 +402,7 @@ export class CinematicSystem {
     if (!this.bullet) return this.advanceToImpact();
     const { from, to } = this.bulletPath;
     const progress = easeIn(t); // accelerates like a real round
-    const pos = from.clone().lerp(to, progress);
+    const pos = T5.copy(from).lerp(to, progress);
     this.bullet.group.position.copy(pos);
     this.bullet.update(dt);
     if (this.bullet.trailAccum > 0.016) {
@@ -398,24 +411,24 @@ export class CinematicSystem {
     }
 
     // ---- camera choreography: muzzle side → orbit → impact side ----
-    const aim = to.clone().sub(from).normalize();
-    const side = new THREE.Vector3().crossVectors(aim, UP).normalize();
-    const desired = new THREE.Vector3();
-    const look = new THREE.Vector3();
+    const aim = this.bulletAim;
+    const side = this.bulletSide;
+    const desired = T1;
+    const look = T2;
 
     if (t < 0.3) {
       // slip sideways off the muzzle as the bullet departs
       const k = easeOut(t / 0.3);
       desired.copy(from).addScaledVector(aim, -0.55 + k * 0.5).addScaledVector(side, 0.3 + k * 0.55).addScaledVector(UP, 0.22 - k * 0.05);
-      look.copy(from).lerp(pos, 0.8);
+      look.copy(from).lerp(this.bullet.group.position, 0.8);
     } else if (t < 0.78) {
       // trailing three-quarter orbit around the round
       const k = (t - 0.3) / 0.48;
       const orbitAngle = k * 1.9 - 0.35;
-      const orbitSide = side.clone().applyAxisAngle(aim, orbitAngle);
+      const orbitSide = T3.copy(side).applyAxisAngle(aim, orbitAngle);
       const dist = lerp(1.15, 0.85, k);
-      desired.copy(pos).addScaledVector(aim, -dist).addScaledVector(orbitSide, dist * 0.75).addScaledVector(UP, lerp(0.3, 0.12, k));
-      look.copy(pos);
+      desired.copy(this.bullet.group.position).addScaledVector(aim, -dist).addScaledVector(orbitSide, dist * 0.75).addScaledVector(UP, lerp(0.3, 0.12, k));
+      look.copy(this.bullet.group.position);
     } else {
       // swing ahead of the target, catch the arrival
       const k = easeOut((t - 0.78) / 0.22);
@@ -495,9 +508,9 @@ export class CinematicSystem {
       // slow drift around where the body fell
       const ragdollPos = this.bulletPath.to;
       const a = this.phaseTime * 0.22;
-      const desired = ragdollPos.clone().add(new THREE.Vector3(Math.sin(a + 1.2) * 1.7, 0.55, Math.cos(a + 1.2) * 1.7));
+      const desired = T1.set(Math.sin(a + 1.2) * 1.7, 0.55, Math.cos(a + 1.2) * 1.7).add(ragdollPos);
       dampV3(this.camPos, desired, 1.6, dt);
-      dampV3(this.camLook, ragdollPos.clone().add(UP.clone().multiplyScalar(-0.4)), 3, dt);
+      dampV3(this.camLook, T2.copy(ragdollPos).addScaledVector(UP, -0.4), 3, dt);
       this.fovTarget = 44;
 
       // eliminated local player transitions to spectator right here
@@ -582,21 +595,21 @@ export class CinematicSystem {
     const shooter = this.shot ? this.ctx.getCharacter(this.shot.shooterId) : null;
     const gunHolder = shooter ?? this.ctx.myCharacter();
     if (gunHolder) {
-      const gunWorld = gun.group.getWorldPosition(new THREE.Vector3());
-      gunHolder.setAimTarget(gunWorld.clone().add(new THREE.Vector3(0, 0.6, 0)));
+      gun.group.getWorldPosition(T1);
+      gunHolder.setAimTarget(T2.copy(T1).add(T3.set(0, 0.6, 0)));
     }
 
     // ---- camera: close-up on the revolver, slowly orbiting ----
-    const gunPos = gun.group.getWorldPosition(new THREE.Vector3());
-    const gunQuat = gun.group.getWorldQuaternion(new THREE.Quaternion());
-    const gunFwd = new THREE.Vector3(0, 0, 1).applyQuaternion(gunQuat);
-    const gunSide = new THREE.Vector3(1, 0, 0).applyQuaternion(gunQuat).normalize();
+    const gunPos = gun.group.getWorldPosition(T1);
+    const gunQuat = gun.group.getWorldQuaternion(TQ);
+    const gunFwd = T2.set(0, 0, 1).applyQuaternion(gunQuat);
+    const gunSide = T3.set(1, 0, 0).applyQuaternion(gunQuat).normalize();
     const orbit = this.phaseTime * 0.12;
-    const camOffset = new THREE.Vector3()
+    const camOffset = T4.set(0, 0, 0)
       .addScaledVector(gunSide, Math.cos(orbit) * 0.42)
       .addScaledVector(gunFwd, 0.22)
       .addScaledVector(UP, 0.12 + Math.sin(orbit) * 0.04);
-    const desired = gunPos.clone().add(camOffset);
+    const desired = T5.copy(gunPos).add(camOffset);
 
     if (!this.camInitialized) {
       this.camPos.copy(camera.position);
@@ -673,9 +686,9 @@ export class CinematicSystem {
   private updateWinner(dt: number, camera: THREE.PerspectiveCamera): void {
     const winner = this.winnerId ? this.ctx.getCharacter(this.winnerId) : null;
     if (winner) {
-      const center = winner.getPartWorld('torso');
+      const center = winner.getPartWorld('torso', T1);
       const a = this.phaseTime * 0.25 + 1.0;
-      const desired = new THREE.Vector3(center.x + Math.sin(a) * 2.6, center.y + 0.7, center.z + Math.cos(a) * 2.6);
+      const desired = T2.set(center.x + Math.sin(a) * 2.6, center.y + 0.7, center.z + Math.cos(a) * 2.6);
       if (!this.camInitialized) { this.camPos.copy(desired); this.camLook.copy(center); this.camInitialized = true; }
       dampV3(this.camPos, desired, 1.4, dt);
       dampV3(this.camLook, center, 3, dt);

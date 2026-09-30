@@ -58,7 +58,7 @@ async function setPaused(page, paused) {
   await page.evaluate((p) => window.__game.setPaused(p), paused).catch(() => {});
 }
 
-async function makePlayer(name) {
+async function makePlayer(name, roomCode = null) {
   const page = await browser.newPage();
   page.setDefaultTimeout(240000);
   page.on('pageerror', (err) => errors.push(`${name}: PAGEERROR ${err.message}`));
@@ -70,7 +70,12 @@ async function makePlayer(name) {
   await page.bringToFront();
   await page.select('#qualitySelect', 'low');
   await page.type('#nameInput', name);
-  await page.click('#enterBtn');
+  if (roomCode) {
+    await page.type('#codeInput', roomCode);
+    await page.click('#joinRoomBtn');
+  } else {
+    await page.click('#createRoomBtn');
+  }
   await page.waitForFunction(() => {
     const g = window.__game;
     return g && g.debugState().connected && g.debugState().phase !== 'CONNECTING';
@@ -108,10 +113,21 @@ try {
   check(state1.phase === 'LOBBY', `host in LOBBY phase (${state1.phase})`);
   await shot(host, '01-lobby-joined.png');
 
-  await makePlayer('Bob');
-  await makePlayer('Carol');
+  // read the created room code, then have the others join with it
+  const roomCode = await host.evaluate(() => window.__game.debugState().roomCode);
+  check(/^[A-Z0-9]{4}$/.test(roomCode), `host created a room (code ${roomCode})`);
+  await makePlayer('Bob', roomCode);
+  await makePlayer('Carol', roomCode);
   await unpauseAll();
   await sleep(1500);
+
+  // everyone's lobby must show the same room code
+  for (const { name, page } of pages) {
+    const code = await page.evaluate(() => window.__game.debugState().roomCode);
+    check(code === roomCode, `${name} is in room ${code}`);
+  }
+  const codeShown = await host.evaluate(() => document.getElementById('roomCode').textContent);
+  check(codeShown === roomCode, `room code displayed in the lobby (${codeShown})`);
 
   for (const { name, page } of pages) {
     const n = await page.evaluate(() => document.querySelectorAll('#lobbyPlayers li').length);

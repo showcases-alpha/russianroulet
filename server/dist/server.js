@@ -26677,6 +26677,10 @@ var RECONNECT_GRACE_MS = 3e4;
 var GameManager = class {
   phase = "LOBBY";
   rules = { ...DEFAULT_RULES };
+  /** Room code this instance is hosted under ('PUB' = the default public room). */
+  code;
+  /** Timestamp when the room last became empty (used by the RoomManager). */
+  emptySince = 0;
   players = new PlayerManager();
   revolver;
   turns = new TurnManager();
@@ -26689,8 +26693,14 @@ var GameManager = class {
   turnDeadlineTimer = null;
   currentTurnPlayer = null;
   turnNumber = 0;
-  constructor() {
+  constructor(code = "PUB") {
+    this.code = code;
     this.revolver = new RevolverState(this.rules.chamberCount, this.rules.liveCount);
+  }
+  /** Tear the room down (timers, tick) when the RoomManager removes it. */
+  dispose() {
+    this.clearTimers();
+    this.stopTick();
   }
   /* ------------------------------------------------------------------ */
   /* helpers                                                             */
@@ -26762,6 +26772,7 @@ var GameManager = class {
       type: "welcome",
       playerId: p.id,
       token: p.token,
+      roomCode: this.code,
       phase: this.phase,
       rules: this.rules,
       serverTime: Date.now()
@@ -27103,6 +27114,75 @@ var GameManager = class {
   }
 };
 
+// server/src/game/roomManager.ts
+var CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+var DEFAULT_ROOM = "PUB";
+var EMPTY_ROOM_TTL_MS = 5 * 6e4;
+var RoomManager = class {
+  rooms = /* @__PURE__ */ new Map();
+  cleaner;
+  constructor() {
+    this.cleaner = setInterval(() => this.cleanup(), 3e4);
+    this.cleaner.unref?.();
+  }
+  /** Create a fresh room with a unique 4-char code. */
+  create() {
+    let code = "";
+    do {
+      code = "";
+      for (let i = 0; i < 4; i++) code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+    } while (this.rooms.has(code));
+    const game = new GameManager(code);
+    this.rooms.set(code, game);
+    return { game, code };
+  }
+  get(code) {
+    return this.rooms.get((code ?? "").trim().toUpperCase());
+  }
+  /** The default room everyone lands in when they don't enter a code. */
+  defaultRoom() {
+    let game = this.rooms.get(DEFAULT_ROOM);
+    if (!game) {
+      game = new GameManager(DEFAULT_ROOM);
+      this.rooms.set(DEFAULT_ROOM, game);
+    }
+    return game;
+  }
+  /** Find the room a reconnect token belongs to. */
+  findByToken(token) {
+    for (const game of this.rooms.values()) {
+      const p = game.players.findByToken(token);
+      if (p && !p.left) return game;
+    }
+    return null;
+  }
+  list() {
+    return [...this.rooms.entries()].map(([code, g]) => ({
+      code,
+      players: g.players.active().filter((p) => p.connected).length,
+      phase: g.phase
+    }));
+  }
+  /** Drop rooms that have been empty for a while (never the default room). */
+  cleanup() {
+    const now = Date.now();
+    for (const [code, game] of this.rooms) {
+      if (code === DEFAULT_ROOM) continue;
+      const connected = game.players.active().filter((p) => p.connected).length;
+      if (connected === 0) {
+        if (!game.emptySince) game.emptySince = now;
+        else if (now - game.emptySince > EMPTY_ROOM_TTL_MS) {
+          console.log(`[rooms] closing empty room ${code}`);
+          game.dispose();
+          this.rooms.delete(code);
+        }
+      } else {
+        game.emptySince = 0;
+      }
+    }
+  }
+};
+
 // server/src/config.ts
 import fs from "node:fs";
 import path from "node:path";
@@ -27127,21 +27207,20 @@ function readPort() {
 
 // server/src/server.ts
 var PORT = readPort();
-var game = new GameManager();
+var rooms = new RoomManager();
 var app = (0, import_express.default)();
 var publicDir = path2.join(ROOT_DIR, "client", "public");
 app.use(import_express.default.static(publicDir, { index: "index.html" }));
-app.get("/healthz", (_req, res) => res.json({ ok: true, phase: game.phase }));
+app.get("/healthz", (_req, res) => res.json({ ok: true, rooms: rooms.list() }));
 app.use((_req, res) => {
   res.sendFile(path2.join(publicDir, "index.html"));
 });
 var server = http.createServer(app);
 var wss = new import_websocket_server.default({ server, path: "/ws" });
-var sockets = /* @__PURE__ */ new WeakMap();
 var HELLO_TIMEOUT = 8e3;
 wss.on("connection", (socket) => {
-  sockets.set(socket, { playerId: null });
   let player = null;
+  let game = null;
   const helloTimer = setTimeout(() => {
     if (!player) socket.close(4e3, "no hello");
   }, HELLO_TIMEOUT);
@@ -27155,12 +27234,35 @@ wss.on("connection", (socket) => {
     if (!msg || typeof msg.type !== "string") return;
     if (msg.type === "hello") {
       if (player) return;
-      const { player: p } = game.join(msg.name || "Stranger", socket, msg.token);
-      player = p;
-      sockets.set(socket, { playerId: p.id });
+      if (msg.token) {
+        const room = rooms.findByToken(msg.token);
+        if (room) {
+          game = room;
+          const joined2 = game.join(msg.name || "Stranger", socket, msg.token);
+          player = joined2.player;
+          return;
+        }
+      }
+      if (msg.create) {
+        const made = rooms.create();
+        console.log(`[rooms] created room ${made.code}`);
+        game = made.game;
+      } else if (msg.room) {
+        const found = rooms.get(msg.room);
+        if (!found) {
+          socket.send(JSON.stringify({ type: "error", code: "room_not_found", message: `No room with code "${String(msg.room).toUpperCase()}".` }));
+          socket.close(4001, "room_not_found");
+          return;
+        }
+        game = found;
+      } else {
+        game = rooms.defaultRoom();
+      }
+      const joined = game.join(msg.name || "Stranger", socket, msg.token);
+      player = joined.player;
       return;
     }
-    if (!player) return;
+    if (!player || !game) return;
     switch (msg.type) {
       case "set_ready":
         game.setReady(player, msg.ready);
@@ -27187,7 +27289,7 @@ wss.on("connection", (socket) => {
   });
   socket.on("close", () => {
     clearTimeout(helloTimer);
-    if (player) game.handleDisconnect(player);
+    if (player && game) game.handleDisconnect(player);
   });
   socket.on("error", () => {
   });
@@ -27208,7 +27310,7 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500");
   console.log(`  Local:      http://localhost:${PORT}`);
   for (const ip of lanAddresses()) console.log(`  Network:    http://${ip}:${PORT}`);
-  console.log("  Players on the same network join with that address.");
+  console.log("  Create a room in-game and share its 4-letter code.");
   console.log(`  Port configured via port.txt (currently ${PORT}).`);
   console.log("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500");
 });

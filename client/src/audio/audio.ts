@@ -487,18 +487,19 @@ export class AudioEngine {
     const q = camera.getWorldQuaternion(_q1);
     const fwd = _v2.set(0, 0, -1).applyQuaternion(q);
     const up = _v3.set(0, 1, 0).applyQuaternion(q);
-    const t = this.ctx.currentTime;
     try {
       if (l.positionX) {
-        l.positionX.linearRampToValueAtTime(p.x, t + 0.05);
-        l.positionY.linearRampToValueAtTime(p.y, t + 0.05);
-        l.positionZ.linearRampToValueAtTime(p.z, t + 0.05);
-        l.forwardX.linearRampToValueAtTime(fwd.x, t + 0.05);
-        l.forwardY.linearRampToValueAtTime(fwd.y, t + 0.05);
-        l.forwardZ.linearRampToValueAtTime(fwd.z, t + 0.05);
-        l.upX.linearRampToValueAtTime(up.x, t + 0.05);
-        l.upY.linearRampToValueAtTime(up.y, t + 0.05);
-        l.upZ.linearRampToValueAtTime(up.z, t + 0.05);
+        // direct assignment — scheduling ramps every frame piles up audio
+        // thread events and costs CPU for no audible benefit
+        l.positionX.value = p.x;
+        l.positionY.value = p.y;
+        l.positionZ.value = p.z;
+        l.forwardX.value = fwd.x;
+        l.forwardY.value = fwd.y;
+        l.forwardZ.value = fwd.z;
+        l.upX.value = up.x;
+        l.upY.value = up.y;
+        l.upZ.value = up.z;
       } else {
         (l as unknown as { setPosition: (x: number, y: number, z: number) => void }).setPosition(p.x, p.y, p.z);
         (l as unknown as { setOrientation: (...a: number[]) => void }).setOrientation(fwd.x, fwd.y, fwd.z, up.x, up.y, up.z);

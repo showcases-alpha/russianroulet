@@ -83,7 +83,7 @@ export interface MatchPlayerInfo {
 export interface ShootPayload { target: string | 'self'; }
 
 export type ClientMessage =
-  | { type: 'hello'; name: string; token?: string; quality?: string }
+  | { type: 'hello'; name: string; token?: string; room?: string; create?: boolean; quality?: string }
   | { type: 'set_ready'; ready: boolean }
   | { type: 'update_settings'; rules: Partial<GameRules> }
   | { type: 'start_game' }
@@ -97,7 +97,7 @@ export type ClientMessage =
 /* ------------------------------------------------------------------ */
 
 export type ServerMessage =
-  | { type: 'welcome'; playerId: string; token: string; phase: Phase; rules: GameRules; serverTime: number }
+  | { type: 'welcome'; playerId: string; token: string; roomCode: string; phase: Phase; rules: GameRules; serverTime: number }
   | { type: 'lobby_state'; players: LobbyPlayerInfo[]; hostId: string; rules: GameRules; canStart: boolean }
   | { type: 'settings_applied'; rules: GameRules }
   | {

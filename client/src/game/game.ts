@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import type { ClientMessage, GameRules, LobbyPlayerInfo, MatchPlayerInfo, ServerMessage } from '../../../shared/protocol.js';
 import { NetClient } from '../networking/netClient.js';
 import { BarEnvironment, type Collider2D } from '../environment/bar.js';
-import { Character, HAT_TYPES, JACKET_COLORS } from '../player/character.js';
+import { Character, JACKET_COLORS } from '../player/character.js';
 import { Ragdoll } from '../physics/ragdoll.js';
 import { PhysicsWorld } from '../physics/physicsWorld.js';
 import { Revolver } from '../weapons/revolver.js';
@@ -18,7 +18,7 @@ import { CinematicSystem, type CineContext } from '../cinematic/cinematic.js';
 import { PostFX } from './postfx.js';
 import { getPreset, QUALITY_LEVELS, type QualityLevel, type QualitySettings } from './quality.js';
 import { AudioEngine } from '../audio/audio.js';
-import { UI, type UICallbacks } from '../ui/ui.js';
+import { UI, type UICallbacks, type EnterMode } from '../ui/ui.js';
 import { clamp, damp, dampV3, lerp } from './mathUtils.js';
 
 interface PlayerEntity {
@@ -59,6 +59,7 @@ export class Game implements CineContext {
 
   rules: GameRules = { chamberCount: 6, liveCount: 1 } as GameRules;
   phase: 'CONNECTING' | 'LOBBY' | 'PLAYING' | 'ENDING' = 'CONNECTING';
+  roomCode = '';
   myId = '';
   private entities = new Map<string, PlayerEntity>();
   private currentTurnId: string | null = null;
@@ -198,7 +199,7 @@ export class Game implements CineContext {
 
   private makeUICallbacks(): UICallbacks {
     return {
-      onEnter: (name, quality) => this.enter(name, quality),
+      onEnter: (name, quality, mode) => this.enter(name, quality, mode),
       onReady: (ready) => this.net.send({ type: 'set_ready', ready }),
       onStart: () => this.net.send({ type: 'start_game' }),
       onSettingsChanged: (rules) => this.net.send({ type: 'update_settings', rules }),
@@ -216,27 +217,32 @@ export class Game implements CineContext {
 
   private sensitivity = 1;
 
-  private async enter(name: string, quality: QualityLevel): Promise<void> {
+  private async enter(name: string, quality: QualityLevel, mode: EnterMode): Promise<void> {
     this.applyQuality(quality);
     await this.audio.start();
     this.audio.startLoops();
     this.audio.setLoopsRunning(true);
-    this.net.connect(name);
-    this.ui.hideLoading();
+    this.ui.setLoadProgress(1, mode.kind === 'create' ? 'Opening a room…' : `Joining room ${mode.code}…`);
+    this.net.connect(name, mode.kind === 'create' ? { create: true } : { room: mode.code });
   }
 
   /* ================================================== network */
 
   private wireNetwork(): void {
     this.net.onStatusChange = (connected) => {
-      if (!connected && this.phase !== 'CONNECTING') this.ui.toast('Connection lost — reconnecting…', 'error');
+      if (!connected && this.phase !== 'CONNECTING' && this.roomCode) {
+        this.ui.toast('Connection lost — reconnecting…', 'error');
+      }
     };
 
     this.net.on('welcome', (m) => {
       this.myId = m.playerId;
       this.rules = m.rules;
       this.phase = m.phase === 'PLAYING' ? 'PLAYING' : m.phase === 'ENDING' ? 'ENDING' : 'LOBBY';
+      this.roomCode = m.roomCode;
       this.ui.setMyInfo(this.myId, '');
+      this.ui.setRoomCode(m.roomCode);
+      this.ui.hideLoading();
       if (this.phase === 'LOBBY') this.ui.showLobby();
     });
 
@@ -261,7 +267,13 @@ export class Game implements CineContext {
     this.net.on('spectator_start', (m) => this.onSpectatorStart(m));
     this.net.on('match_end', (m) => this.onMatchEnd(m));
     this.net.on('back_to_lobby', () => this.onBackToLobby());
-    this.net.on('error', (m) => this.ui.toast(m.message, 'error'));
+    this.net.on('error', (m) => {
+      this.ui.toast(m.message, 'error');
+      if (m.code === 'room_not_found') {
+        this.roomCode = '';
+        this.ui.showEntryAgain();
+      }
+    });
   }
 
   private entity(id: string): PlayerEntity | undefined { return this.entities.get(id); }
@@ -281,8 +293,7 @@ export class Game implements CineContext {
 
   private spawnCharacter(e: PlayerEntity, pos: THREE.Vector3, yaw: number): void {
     if (e.character) return;
-    const hat = HAT_TYPES[e.colorIndex % HAT_TYPES.length];
-    e.character = new Character(e.id, e.name, e.colorIndex, hat);
+    e.character = new Character(e.id, e.name, e.colorIndex);
     e.character.group.position.copy(pos);
     e.character.group.rotation.y = yaw;
     this.scene.add(e.character.group);
@@ -602,7 +613,7 @@ export class Game implements CineContext {
   }
 
   private thirdPersonPose(char: Character, out: { pos: THREE.Vector3; look: THREE.Vector3 }): void {
-    const head = char.getPartWorld('head');
+    const head = char.getPartWorld('head', TV_HEAD);
     const dist = 3.1;
     const dir = TMP_C.set(
       Math.sin(this.camYaw) * Math.cos(this.camPitch),
@@ -945,9 +956,10 @@ export class Game implements CineContext {
       if (this.cinematic.activeShot) {
         const shooter = this.currentCineShooterId ? this.entity(this.currentCineShooterId) : null;
         if (shooter?.character) {
+          const head = shooter.character.getPartWorld('head', TV_HEAD);
           for (const e of this.entities.values()) {
             if (e.character && e.id !== shooter.id && !e.ragdoll) {
-              e.character.setLookAt(shooter.character.getPartWorld('head'));
+              e.character.setLookAt(head);
             }
           }
         }
@@ -1016,14 +1028,14 @@ export class Game implements CineContext {
   /** Debug/testing handle (also exposed as window.__game). */
   debugState(): {
     phase: string; myId: string; turnId: string | null; alive: Record<string, boolean>;
-    entities: number; cine: string; fps: number; connected: boolean;
+    entities: number; cine: string; fps: number; connected: boolean; roomCode: string;
   } {
     const alive: Record<string, boolean> = {};
     for (const [id, e] of this.entities) alive[id] = e.alive && !e.spectator;
     return {
       phase: this.phase, myId: this.myId, turnId: this.currentTurnId,
       alive, entities: this.entities.size, cine: this.cinematic?.phase ?? 'n/a',
-      fps: Math.round(this.fpsEMA), connected: this.net.connected,
+      fps: Math.round(this.fpsEMA), connected: this.net.connected, roomCode: this.roomCode,
     };
   }
 
@@ -1043,6 +1055,7 @@ const TMP_C = new THREE.Vector3();
 const TMP_D = new THREE.Vector3();
 const POSE_POS = new THREE.Vector3();
 const POSE_LOOK = new THREE.Vector3();
+const TV_HEAD = new THREE.Vector3();
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));

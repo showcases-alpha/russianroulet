@@ -54,7 +54,7 @@ try {
   await page.waitForSelector('#entryPanel:not(.hidden)', { timeout: 240000 });
   await page.select('#qualitySelect', 'low');
   await page.type('#nameInput', 'OrientationBot');
-  await page.click('#enterBtn');
+  await page.click('#createRoomBtn');
   await page.waitForFunction(() => {
     const g = window.__game;
     return g && g.debugState().phase === 'LOBBY' && g.debugState().entities >= 1;

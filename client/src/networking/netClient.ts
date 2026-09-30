@@ -21,12 +21,17 @@ export class NetClient {
   connected = false;
   onStatusChange: ((connected: boolean) => void) | null = null;
 
-  connect(name: string): void {
+  connect(name: string, opts: { create?: boolean; room?: string } = {}): void {
     this.name = name;
+    this.roomCreate = !!opts.create;
+    this.roomCode = opts.room ?? null;
     this.closedByUs = false;
     this.token = sessionStorage.getItem('rr_token') ?? null;
     this.open();
   }
+
+  private roomCreate = false;
+  private roomCode: string | null = null;
 
   private open(): void {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -42,7 +47,12 @@ export class NetClient {
       this.connected = true;
       this.reconnectDelay = 1000;
       this.onStatusChange?.(true);
-      const hello: ClientMessage = { type: 'hello', name: this.name, ...(this.token ? { token: this.token } : {}) };
+      const hello: ClientMessage = {
+        type: 'hello', name: this.name,
+        ...(this.token ? { token: this.token } : {}),
+        ...(this.roomCreate ? { create: true } : {}),
+        ...(this.roomCode ? { room: this.roomCode } : {}),
+      };
       this.ws!.send(JSON.stringify(hello));
       // flush queued messages
       for (const m of this.queue) this.ws!.send(JSON.stringify(m));
@@ -61,9 +71,11 @@ export class NetClient {
       for (const h of this.handlers.get(msg.type) ?? []) h(msg);
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (ev) => {
       this.connected = false;
       this.stopPing();
+      // 4001 = server rejected the room code — do not reconnect-loop
+      if (ev.code === 4001) this.closedByUs = true;
       this.onStatusChange?.(false);
       if (!this.closedByUs) this.scheduleReconnect();
     };

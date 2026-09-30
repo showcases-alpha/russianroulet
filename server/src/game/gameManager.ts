@@ -19,6 +19,10 @@ const RECONNECT_GRACE_MS = 30_000;
 export class GameManager {
   phase: Phase = 'LOBBY';
   rules: GameRules = { ...DEFAULT_RULES };
+  /** Room code this instance is hosted under ('PUB' = the default public room). */
+  readonly code: string;
+  /** Timestamp when the room last became empty (used by the RoomManager). */
+  emptySince = 0;
 
   readonly players = new PlayerManager();
   private revolver: RevolverState;
@@ -33,8 +37,15 @@ export class GameManager {
   private currentTurnPlayer: string | null = null;
   private turnNumber = 0;
 
-  constructor() {
+  constructor(code = 'PUB') {
+    this.code = code;
     this.revolver = new RevolverState(this.rules.chamberCount, this.rules.liveCount);
+  }
+
+  /** Tear the room down (timers, tick) when the RoomManager removes it. */
+  dispose(): void {
+    this.clearTimers();
+    this.stopTick();
   }
 
   /* ------------------------------------------------------------------ */
@@ -104,7 +115,7 @@ export class GameManager {
 
   private sendWelcome(p: Player, reconnected: boolean): void {
     p.send({
-      type: 'welcome', playerId: p.id, token: p.token, phase: this.phase,
+      type: 'welcome', playerId: p.id, token: p.token, roomCode: this.code, phase: this.phase,
       rules: this.rules, serverTime: Date.now(),
     });
     if (reconnected) {

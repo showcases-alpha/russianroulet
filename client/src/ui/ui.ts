@@ -8,8 +8,10 @@ import type { QualityLevel } from '../game/quality.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
+export type EnterMode = { kind: 'create' } | { kind: 'join'; code: string };
+
 export interface UICallbacks {
-  onEnter: (name: string, quality: QualityLevel) => void;
+  onEnter: (name: string, quality: QualityLevel, mode: EnterMode) => void;
   onReady: (ready: boolean) => void;
   onStart: () => void;
   onSettingsChanged: (rules: Partial<GameRules>) => void;
@@ -39,16 +41,38 @@ export class UI {
   }
 
   private wire(): void {
-    $('enterBtn').onclick = () => {
+    const doEnter = (mode: EnterMode) => {
       const name = ($('nameInput') as HTMLInputElement).value.trim() || 'Stranger';
       const q = ($('qualitySelect') as HTMLSelectElement).value as QualityLevel;
       localStorage.setItem('rr_name', name);
       localStorage.setItem('rr_quality', q);
-      this.cb.onEnter(name, q);
+      this.cb.onEnter(name, q, mode);
+    };
+    $('createRoomBtn').onclick = () => doEnter({ kind: 'create' });
+    $('joinRoomBtn').onclick = () => {
+      const code = ($('codeInput') as HTMLInputElement).value.trim().toUpperCase();
+      if (code.length < 3) { this.toast('Enter the 4-letter room code first.', 'error'); return; }
+      doEnter({ kind: 'join', code });
     };
     $('nameInput').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') $('enterBtn').click();
+      if (e.key === 'Enter') doEnter({ kind: 'create' });
     });
+    $('codeInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') $('joinRoomBtn').click();
+    });
+    $('codeInput').addEventListener('input', () => {
+      const el = $('codeInput') as HTMLInputElement;
+      el.value = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+    });
+    $('copyCodeBtn').onclick = async () => {
+      const code = $('roomCode').textContent ?? '';
+      try {
+        await navigator.clipboard.writeText(code);
+        this.toast(`Room code ${code} copied — send it to your friends!`);
+      } catch {
+        this.toast(`Room code: ${code}`);
+      }
+    };
     $('readyBtn').onclick = () => {
       const ready = $('readyBtn').dataset.on === '1';
       this.cb.onReady(!ready);
@@ -109,6 +133,12 @@ export class UI {
     $('loading').classList.add('hidden');
   }
 
+  /** Back to the name + room-code screen (e.g. after a bad room code). */
+  showEntryAgain(): void {
+    $('loading').classList.remove('hidden');
+    $('entryPanel').classList.remove('hidden');
+  }
+
   /* ---------------- lobby ---------------- */
 
   showLobby(): void {
@@ -122,6 +152,11 @@ export class UI {
     $('hud').classList.remove('hidden');
     $('settingsBtn').classList.remove('hidden');
     $('controlsHint').classList.remove('hidden');
+  }
+
+  setRoomCode(code: string): void {
+    $('roomCodeRow').classList.remove('hidden');
+    $('roomCode').textContent = code;
   }
 
   setMyInfo(myId: string, hostId: string): void {
@@ -210,13 +245,19 @@ export class UI {
   private turnDeadlineSec = 45;
   setTurnDuration(sec: number): void { this.turnDeadlineSec = sec; }
 
+  private lastPromptHtml = '';
   showPrompt(html: string): void {
+    // called every frame — skip DOM work when nothing changed
+    if (html === this.lastPromptHtml && this.promptVisible) return;
+    this.lastPromptHtml = html;
     const p = $('prompt');
     p.innerHTML = html;
     p.classList.remove('hidden');
     this.promptVisible = true;
   }
   hidePrompt(): void {
+    if (!this.promptVisible) return;
+    this.lastPromptHtml = '';
     $('prompt').classList.add('hidden');
     this.promptVisible = false;
   }
